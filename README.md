@@ -4,246 +4,152 @@ Implementation of replica trick-based estimators for offline estimation of V* in
 
 ## Overview
 
-This repository contains the implementation and experiments for my senior thesis on **replica trick estimators** for offline value function estimation under KL-regularized control. The code implements and compares four estimators:
+This repository contains the implementation and experiments for my senior thesis on **replica trick estimators** for offline value function estimation under KL-regularized control. The code implements and compares four estimator families:
 
-1. **LME (Log-Mean-Exp)** - Baseline biased estimator
-2. **Single-Replica** - Fixed replica order n > 1
-3. **Multi-n Slope** - Linear extrapolation across multiple replica orders
-4. **Multi-n Slope + Jackknife** - Slope estimator with delete-one jackknife bias correction
+1. **LME (Log-Mean-Exp)** — Baseline biased estimator
+2. **Single-Replica** — Fixed replica order n > 1
+3. **Multi-n Slope** — Linear extrapolation across multiple replica orders
+4. **Multi-n Slope + Jackknife** — Slope estimator with delete-one jackknife bias correction
 
 ## Repository Structure
 
 ```
 .
 ├── src/
-│   ├── estimators.py      # Core V* estimators
-│   ├── ground_truth.py    # Analytical V* computation
-│   └── metrics.py         # Bias, variance, RMSE metrics
-├── run_experiment1.py     # Main experiment runner (scalar setting)
-├── results/               # Experiment outputs (plots, CSV)
-├── requirements.txt       # Python dependencies
-└── README.md             # This file
+│   ├── __init__.py            # Package marker
+│   ├── estimators.py          # Core V* estimators (distribution-agnostic)
+│   ├── ground_truth.py        # Analytical V* for Gaussian and Bernoulli
+│   ├── metrics.py             # Bias, variance, RMSE metrics
+│   ├── experiment_runner.py   # Generic Monte Carlo experiment runner
+│   └── plotting.py            # Triptych plot generation
+├── run_experiment1_gaussian.py    # Experiment 1a: Gaussian rewards
+├── run_experiment1_bernoulli.py   # Experiment 1b: Bernoulli rewards
+├── results/
+│   ├── gaussian/
+│   │   └── 2026-02-11_21-34-10/  # Timestamped run
+│   │       ├── config.json       # Full config snapshot
+│   │       ├── results.csv       # Numerical results
+│   │       └── *.png             # Triptych plots
+│   └── bernoulli/
+│       └── 2026-02-11_21-35-00/
+│           ├── config.json
+│           ├── results.csv
+│           ├── p0.01/            # Plots for p=0.01
+│           ├── p0.05/
+│           └── ...
+├── requirements.txt           # Python dependencies
+├── .gitignore
+└── README.md
 ```
 
 ## Setup
 
-### 1. Clone the repository
-
-```bash
-git clone <your-repo-url>
-cd replica-value-estimation
-```
-
-### 2. Create a virtual environment (recommended)
+### 1. Create a virtual environment (recommended)
 
 ```bash
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-### 3. Install dependencies
+### 2. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Required packages:
-- `numpy` - Numerical computing
-- `scipy` - Statistical functions
-- `pandas` - Data handling
-- `matplotlib` - Plotting
+Required packages: `numpy`, `scipy`, `pandas`, `matplotlib`
 
 ## Running Experiments
 
-### Experiment 1: Scalar Estimation
+Each run creates a new **timestamped directory** (e.g., `results/gaussian/2026-02-11_21-34-10/`) with a `config.json` snapshot, `results.csv`, and plots. Previous runs are never overwritten.
 
-Pure scalar setting with Gaussian rewards to validate estimator properties.
+### Experiment 1a: Gaussian Rewards
 
-#### Quick Test (for debugging)
+Scalar setting with `r ~ N(0, 1)`, where `V* = μ + σ²/(2β)`.
+
 ```bash
-python run_experiment1.py --quick
-```
-- 3 N_tot values: [32, 128, 512]
-- 50 Monte Carlo trials
-- 2 single-replica variants
-- 1 multi-n set
-- **Completes in ~0.3 seconds**
+# Quick test (~0.5 seconds)
+python run_experiment1_gaussian.py --quick
 
-#### Full Experiment (for thesis results)
-```bash
-python run_experiment1.py
+# Full experiment (~2-3 minutes)
+python run_experiment1_gaussian.py
 ```
-- 8 N_tot values: [16, 32, 64, 128, 256, 512, 1024, 2048]
+
+**Configuration:**
+- β ∈ {0.5, 1.0, 2.0}
+- N_tot ∈ {16, 32, 64, 128, 256, 512, 1024, 2048}
 - 1000 Monte Carlo trials
 - 5 single-replica variants (n ∈ {2, 3, 4, 5, 8})
 - 5 multi-n order sets (each with/without jackknife)
-- **Completes in ~5-10 minutes**
 
-### Output Files
+**Output:** `results/gaussian/<timestamp>/` — 9 triptych plots + CSV + config.json
 
-All results are saved to the `results/` directory:
+### Experiment 1b: Bernoulli Rewards
 
-**Plots** (9 files):
-- `bias_beta{X}.png` - Bias vs N_tot for β=X
-- `variance_beta{X}.png` - Variance vs N_tot for β=X
-- `rmse_beta{X}.png` - RMSE vs N_tot for β=X
+Binary reward setting with `r ~ Bernoulli(p)`, where `V* = β·log(1-p + p·exp(1/β))`.
+Focuses on the rare-success regime relevant to A*PO with difficult prompts.
 
-Where X ∈ {0.5, 1.0, 2.0}
+```bash
+# Quick test (~6 seconds)
+python run_experiment1_bernoulli.py --quick
 
-**Data**:
-- `experiment1_results.csv` - Full numerical results
-
-## Configuration
-
-You can modify experiment parameters in `run_experiment1.py`:
-
-### Key Parameters
-
-```python
-# Reward distribution
-MU_R = 0.0         # Reward mean
-SIGMA_R = 1.0      # Reward standard deviation
-
-# KL regularization parameters
-BETAS = [0.5, 1.0, 2.0]
-
-# Sample budgets
-N_TOT_VALUES = [16, 32, 64, 128, 256, 512, 1024, 2048]
-
-# Monte Carlo trials
-T_TRIALS = 1000
-
-# Single-replica configurations to test
-SINGLE_REPLICA_N_VALUES = [2, 3, 4, 5, 8]
-
-# Multi-n order sets to test
-MULTI_N_ORDER_SETS = [
-    [2, 3],           # Minimal set
-    [2, 3, 4],        # Small set
-    [2, 3, 4, 5],     # Original set
-    [2, 3, 4, 5, 6],  # Extended set
-    [2, 4, 6, 8],     # Even orders only
-]
-
-# Random seed for reproducibility
-SEED = 42
+# Full experiment (~3-4 minutes)
+python run_experiment1_bernoulli.py
 ```
 
-## Understanding the Estimators
+**Configuration:**
+- p ∈ {0.01, 0.05, 0.1, 0.2, 0.5}
+- β ∈ {0.5, 1.0, 2.0}
+- N_tot ∈ {4, 8, 16, 32, 64, 128, 256}
+- 1000 Monte Carlo trials
+- Same estimator configurations as Gaussian
 
-### 1. LME (Log-Mean-Exp)
-```python
-V_hat = beta * log(mean(exp(r_i / beta)))
-```
-- Simple and fast
-- **Negatively biased** (Jensen's inequality)
-- Baseline for comparison
+**Output:** `results/bernoulli/<timestamp>/` — 9 triptych plots per p value (45 total) + CSV + config.json
 
-### 2. Single-Replica (n=N)
-```python
-# Partition N samples into blocks of size n
-# Compute product within each block, then average
-V_hat = beta * log(mean(product_of_n_samples))
-```
-- Reduces bias compared to LME
-- Performance depends on choice of n
+## Understanding the Plots
 
-### 3. Multi-n Slope
-```python
-# Fit linear model: phi_hat(n) ~ a + b*n
-# where phi_hat(n) = log(mean(block_products))
-V_hat = beta * b  # Extract slope
-```
-- Uses multiple replica orders to extrapolate
-- Theoretically less biased
-- Current implementation: each n uses **full N_tot budget**
+Each plot is a **triptych** — three side-by-side panels sharing the same y-axis:
 
-### 4. Multi-n Slope + Jackknife
-- Applies delete-one jackknife to each phi_hat(n)
-- Reduces bias further at cost of increased variance
+| Left Panel | Middle Panel | Right Panel |
+|---|---|---|
+| Single-Replica estimators | Multi-n Slope estimators | Multi-n Slope + Jackknife |
 
-## Interpreting Results
+**LME (baseline)** appears as a solid black line in every panel for reference.
 
-### Plots
+- **Bias plots**: How far estimates are from true V* (closer to 0 is better)
+- **Variance plots**: Spread of estimates across trials (log scale; lower is better)
+- **RMSE plots**: Overall error combining bias and variance (log scale; lower is better)
 
-Each plot shows one metric for one β value. All estimators are overlaid for comparison.
+## Code Architecture
 
-**Bias plots**: How far estimates are from true V* (should be near 0)
-**Variance plots**: Spread of estimates across trials (lower is better)
-**RMSE plots**: Overall error combining bias and variance (lower is better)
+The codebase is designed to be **modular and distribution-agnostic**:
 
-### CSV Data
+- **`src/estimators.py`** — All four estimators. They take raw reward arrays and don't know the underlying distribution.
+- **`src/experiment_runner.py`** — Generic Monte Carlo loop. Parametrized by `sample_fn(rng, n_tot)` and `v_star_fn(beta)`.
+- **`src/plotting.py`** — Triptych plotting code. Works with any DataFrame in the standard format.
+- **Experiment scripts** — Thin wrappers that define the distribution-specific configuration and call the runner.
+
+To add a new reward distribution, you only need:
+1. Add ground-truth functions to `src/ground_truth.py`
+2. Write a thin experiment script (follow `run_experiment1_bernoulli.py` as a template)
+
+## CSV Data Format
 
 The results CSV contains:
 - `beta`: KL regularization parameter
 - `n_tot`: Sample budget
-- `method`: Estimator name (e.g., "lme", "single_n2", "multi_[2,3,4]")
-- `bias`: Bias of the estimator
-- `variance`: Variance of the estimator
-- `rmse`: Root mean squared error
+- `method`: Estimator name (e.g., "lme", "single_n2", "multi_[2,3,4]_jk")
+- `bias`, `variance`, `rmse`: Evaluation metrics
 - `v_star`: Ground truth V*
 - `mean_estimate`: Average estimate across trials
 - `n_valid`: Number of valid (non-NaN) estimates
-
-## Scientific Questions
-
-This codebase helps answer:
-
-1. **How does replica order affect single-replica performance?**
-   - Compare single_n2, single_n3, single_n4, single_n5, single_n8
-
-2. **How does the multi-n set choice affect slope estimator?**
-   - Compare different sets: [2,3], [2,3,4], [2,3,4,5], etc.
-
-3. **Does jackknife help or hurt?**
-   - Compare methods with/without `_jk` suffix
-
-4. **How does performance scale with β?**
-   - Compare across β ∈ {0.5, 1.0, 2.0}
-
-5. **What is the sample efficiency?**
-   - Look at RMSE vs N_tot curves
+- `p` (Bernoulli only): Success probability
 
 ## Troubleshooting
 
-### Import Errors
-Make sure you've activated your virtual environment and installed all dependencies:
-```bash
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-### Slow Execution
-Use `--quick` mode for testing:
-```bash
-python run_experiment1.py --quick
-```
-
-### Memory Issues
-Reduce `T_TRIALS` or the number of `N_TOT_VALUES` in the configuration.
-
-### Plot Display Issues
-Plots are saved to files automatically. If matplotlib warnings appear, they can usually be ignored.
-
-## Future Work
-
-- **Experiment 2**: Multi-context (contextual bandit) setting
-- **Ablation studies**: Effect of reward distribution parameters
-- **Variance reduction**: Other bias correction techniques
-- **Online estimation**: Extend to online A*PO implementation
-
-## Citation
-
-If you use this code in your research, please cite:
-
-```
-[Your thesis citation here]
-```
-
-## License
-
-[Your license choice]
-
-## Contact
-
-[Your contact information]
+| Problem | Solution |
+|---|---|
+| Import errors | Activate venv: `source venv/bin/activate && pip install -r requirements.txt` |
+| Slow execution | Use `--quick` mode for testing |
+| Memory issues | Reduce `T_TRIALS` or `N_TOT_VALUES` in the script |
+| Plot warnings | Matplotlib warnings about fonts/cache can usually be ignored |

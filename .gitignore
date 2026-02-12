@@ -42,9 +42,10 @@ venv.bak/
 .ipynb_checkpoints
 
 # Results and outputs (keep structure, ignore generated files)
-results/*.png
-results/*.csv
-results/*.pdf
+results/**/*.png
+results/**/*.csv
+results/**/*.pdf
+results/**/*.json
 
 # Matplotlib cache
 .matplotlib/
@@ -65,4 +66,3 @@ dmypy.json
 # Temporary files
 *.tmp
 *.log
-
