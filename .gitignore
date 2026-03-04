@@ -66,3 +66,7 @@ dmypy.json
 # Temporary files
 *.tmp
 *.log
+
+# Thesis writeup and PDFs (local only)
+RERUN_RESULTS_LATEX_ANALYSIS.txt
+Research_Progress_Summary_A_PO (6).pdf
