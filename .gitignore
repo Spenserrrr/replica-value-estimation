@@ -70,3 +70,5 @@ dmypy.json
 # Thesis writeup and PDFs (local only)
 RERUN_RESULTS_LATEX_ANALYSIS.txt
 Research_Progress_Summary_A_PO (6).pdf
+experiment2_design.tex
+experiment2_results.tex

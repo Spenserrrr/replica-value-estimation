@@ -32,8 +32,8 @@ import pandas as pd
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.ground_truth import compute_v_star_bernoulli
-from src.experiment_runner import run_experiment
-from src.plotting import plot_results
+from src.exp1_runner import run_experiment
+from src.exp1_plotting import plot_results
 
 
 # =============================================================================
