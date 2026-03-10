@@ -75,6 +75,12 @@ MULTI_N_SETS = [
     [2, 3, 4],     # Best at very low budgets (N=4)
 ]
 
+# ---- Beta-smoothed estimator priors (Bernoulli-specific) ----
+BETA_SMOOTH_PRIORS = [
+    ("laplace", 1.0, 1.0),    # Uniform prior: p_tilde = (k+1)/(N+2)
+    ("jeffreys", 0.5, 0.5),   # Jeffreys prior: p_tilde = (k+0.5)/(N+1)
+]
+
 # ---- Stage 2 KL coefficient (for distortion analysis) ----
 BETA2 = 1e-3
 
@@ -99,6 +105,7 @@ QUICK_CONFIG = {
     "t_trials": 20,
     "single_n_values": [4, 8],
     "multi_n_sets": [[2, 4, 6, 8]],
+    "beta_smooth_priors": [("laplace", 1.0, 1.0)],
 }
 
 
@@ -126,6 +133,7 @@ def main():
         t_trials = cfg["t_trials"]
         single_n_values = cfg["single_n_values"]
         multi_n_sets = cfg["multi_n_sets"]
+        beta_smooth_priors = cfg["beta_smooth_priors"]
         print("=== QUICK MODE ===")
     else:
         difficulty_regimes = DIFFICULTY_REGIMES
@@ -135,6 +143,7 @@ def main():
         t_trials = T_TRIALS
         single_n_values = SINGLE_N_VALUES
         multi_n_sets = MULTI_N_SETS
+        beta_smooth_priors = BETA_SMOOTH_PRIORS
 
     # ---- Create timestamped run directory ----
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -153,6 +162,7 @@ def main():
         "t_trials": t_trials,
         "single_n_values": single_n_values,
         "multi_n_sets": multi_n_sets,
+        "beta_smooth_priors": [(n, a, g) for n, a, g in beta_smooth_priors],
         "beta2": BETA2,
         "seed": SEED,
         "quick_mode": args.quick,
@@ -172,6 +182,7 @@ def main():
     print(f"  MC trials (T):        {t_trials}")
     print(f"  Single-n values:      {single_n_values}")
     print(f"  Multi-n sets:         {multi_n_sets}")
+    print(f"  Beta-smooth priors:   {[(n, a, g) for n, a, g in beta_smooth_priors]}")
     print(f"  Stage 2 beta_2:       {BETA2}")
     print(f"  Seed:                 {SEED}")
     print()
@@ -222,6 +233,7 @@ def main():
             multi_n_sets=multi_n_sets,
             seed=SEED,
             beta2=BETA2,
+            beta_smooth_priors=beta_smooth_priors,
         )
         elapsed = time.time() - t_start
         print(f"\n  Regime '{regime_name}' completed in {elapsed:.1f}s")

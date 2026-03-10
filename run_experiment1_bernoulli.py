@@ -64,6 +64,13 @@ MULTI_N_ORDER_SETS = [
     [2, 4, 6, 8],     # Even orders only
 ]
 
+# ---- Beta-smoothed estimator priors (Bernoulli-specific) ----
+# Each entry: (name, alpha, gamma) for Beta(alpha, gamma) prior
+BETA_SMOOTH_PRIORS = [
+    ("laplace", 1.0, 1.0),    # Uniform prior: p_tilde = (k+1)/(N+2)
+    ("jeffreys", 0.5, 0.5),   # Jeffreys prior: p_tilde = (k+0.5)/(N+1)
+]
+
 # ---- Random seed for reproducibility ----
 SEED = 42
 
@@ -82,6 +89,7 @@ QUICK_CONFIG = {
     "t_trials": 50,
     "single_n_values": [2, 4],
     "multi_n_sets": [[2, 3, 4, 5]],
+    "beta_smooth_priors": [("laplace", 1.0, 1.0)],
 }
 
 
@@ -108,6 +116,7 @@ def main():
         t_trials = cfg["t_trials"]
         single_n_values = cfg["single_n_values"]
         multi_n_sets = cfg["multi_n_sets"]
+        beta_smooth_priors = cfg["beta_smooth_priors"]
         print("=== QUICK MODE ===")
     else:
         p_values = P_VALUES
@@ -116,6 +125,7 @@ def main():
         t_trials = T_TRIALS
         single_n_values = SINGLE_REPLICA_N_VALUES
         multi_n_sets = MULTI_N_ORDER_SETS
+        beta_smooth_priors = BETA_SMOOTH_PRIORS
 
     # ---- Create timestamped run directory ----
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -131,6 +141,7 @@ def main():
         "t_trials": t_trials,
         "single_n_values": single_n_values,
         "multi_n_sets": multi_n_sets,
+        "beta_smooth_priors": [(n, a, g) for n, a, g in beta_smooth_priors],
         "seed": SEED,
         "quick_mode": args.quick,
     }
@@ -148,6 +159,7 @@ def main():
     print(f"  Monte Carlo trials:      {t_trials}")
     print(f"  Single-replica n values: {single_n_values}")
     print(f"  Multi-n order sets:      {multi_n_sets}")
+    print(f"  Beta-smooth priors:      {[(n, a, g) for n, a, g in beta_smooth_priors]}")
     print(f"  Random seed:             {SEED}")
     print()
 
@@ -189,6 +201,7 @@ def main():
             multi_n_sets=multi_n_sets,
             seed=SEED,
             extra_columns={"p": p},
+            beta_smooth_priors=beta_smooth_priors,
         )
         elapsed = time.time() - t_start
         print(f"\n  p={p} completed in {elapsed:.1f}s")

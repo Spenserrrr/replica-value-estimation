@@ -51,6 +51,9 @@ def _method_label(method_name: str) -> str:
     """Convert internal method keys to readable labels for plots/tables."""
     if method_name == "lme":
         return "LME"
+    if method_name.startswith("beta_smooth_"):
+        prior = method_name.replace("beta_smooth_", "").capitalize()
+        return f"Beta-smooth ({prior})"
     if method_name.startswith("single_n"):
         n = method_name.replace("single_n", "")
         return f"Single n={n}"

@@ -1,7 +1,7 @@
 """
 Estimators for V* = beta * log Z, where Z = E[exp(r / beta)].
 
-This module implements four estimators:
+This module implements five estimator families:
 
 1. **LME (Log-Mean-Exp)**: The standard biased estimator.
        V_hat = beta * log( (1/N) * sum_i exp(r_i / beta) )
@@ -18,6 +18,12 @@ This module implements four estimators:
 4. **Multi-n Slope (with jackknife)**: Same as (3), but applies delete-one jackknife
    bias correction to each phi_hat(n) before fitting the linear model.
    This reduces the O(1/M_n) bias to O(1/M_n^2).
+
+5. **Beta-Smoothed (Bernoulli only)**: Exploits the Bernoulli reward structure.
+   Estimates the success probability via Beta-Binomial posterior mean
+   p_tilde = (k + alpha) / (N + alpha + gamma), then plugs into the
+   closed form V* = beta * log(1 - p_tilde + p_tilde * exp(1/beta)).
+   This avoids the endpoint-snapping problem at small N.
 
 All estimators use the same total sample budget N_tot for fair comparison.
 Numerical stability is ensured via scipy.special.logsumexp throughout.
@@ -272,4 +278,50 @@ def estimate_multi_n_slope(
     slope = coeffs[0]
 
     return beta * slope
+
+
+# =============================================================================
+# Estimator 5: Beta-Smoothed Estimator (Bernoulli rewards only)
+# =============================================================================
+
+def estimate_beta_smoothed(
+    rewards: np.ndarray,
+    beta: float,
+    alpha: float = 1.0,
+    gamma: float = 1.0,
+) -> float:
+    """
+    Beta-smoothed plug-in estimator for V* under Bernoulli rewards.
+
+    For Bernoulli r ∈ {0, 1}, LME is algebraically equivalent to plugging the
+    MLE p_hat = k/N into V* = beta * log(1 - p + p * exp(1/beta)).  This
+    estimator replaces p_hat with the posterior mean from a Beta(alpha, gamma)
+    prior, which avoids endpoint snapping when k = 0 or k = N.
+
+        p_tilde = (k + alpha) / (N + alpha + gamma)
+        V_hat   = beta * log(1 - p_tilde + p_tilde * exp(1/beta))
+
+    Parameters
+    ----------
+    rewards : np.ndarray of shape (N,)
+        Binary reward samples (must be 0 or 1).
+    beta : float
+        KL regularization parameter. Must be > 0.
+    alpha : float
+        First Beta prior hyperparameter (pseudo-successes). Default 1.0 (Laplace).
+    gamma : float
+        Second Beta prior hyperparameter (pseudo-failures). Default 1.0 (Laplace).
+
+    Returns
+    -------
+    float
+        Estimated V*.
+    """
+    N = len(rewards)
+    if N == 0:
+        return np.nan
+
+    k = rewards.sum()
+    p_tilde = (k + alpha) / (N + alpha + gamma)
+    return beta * np.log(1.0 - p_tilde + p_tilde * np.exp(1.0 / beta))
 

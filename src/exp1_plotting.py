@@ -56,6 +56,10 @@ MULTI_MARKERS = ["s", "^", "D", "v", "p"]
 MULTI_JK_COLORS = ["#6baed6", "#74c476", "#9ecae1", "#a1d99b", "#bcbddc"]
 MULTI_JK_MARKERS = ["s", "^", "D", "v", "p"]
 
+# Beta-smoothed family: purple/magenta tones, solid lines
+BETA_SMOOTH_COLORS = ["#7b3294", "#c2a5cf", "#a6611a"]
+BETA_SMOOTH_MARKERS = ["*", "P", "X"]
+
 # Human-readable metric labels (used in y-axis and titles)
 METRIC_LABELS = {
     "bias": "Bias",
@@ -68,10 +72,11 @@ FAMILY_SHORT_TITLES = {
     "single_replica": "Single-Replica",
     "multi_n": "Multi-n Slope",
     "multi_n_jk": "Multi-n Slope + Jackknife",
+    "beta_smooth": "Beta-Smoothed",
 }
 
-# Ordered list of families for the triptych (left to right)
-FAMILY_ORDER = ["single_replica", "multi_n", "multi_n_jk"]
+# Ordered list of families (beta_smooth added dynamically if present)
+FAMILY_ORDER_BASE = ["single_replica", "multi_n", "multi_n_jk"]
 
 
 # =============================================================================
@@ -103,6 +108,8 @@ def _classify_methods(df):
 
     # Sort single-replica by n value for consistent ordering
     single_keys.sort(key=lambda m: int(m.replace("single_n", "")))
+
+    beta_smooth_keys = [m for m in all_methods if m.startswith("beta_smooth_")]
 
     families = {}
 
@@ -144,6 +151,20 @@ def _classify_methods(df):
             "markersize": 7,
         }))
     families["multi_n_jk"] = items
+
+    # ---- Family 4: Beta-smoothed estimators (only if present) ----
+    if beta_smooth_keys:
+        items = [("lme", "LME (baseline)", LME_STYLE)]
+        for i, key in enumerate(beta_smooth_keys):
+            prior_name = key.replace("beta_smooth_", "").capitalize()
+            items.append((key, f"Beta-smooth ({prior_name})", {
+                "color": BETA_SMOOTH_COLORS[i % len(BETA_SMOOTH_COLORS)],
+                "marker": BETA_SMOOTH_MARKERS[i % len(BETA_SMOOTH_MARKERS)],
+                "linestyle": "-",
+                "linewidth": 2,
+                "markersize": 8,
+            }))
+        families["beta_smooth"] = items
 
     return families
 
@@ -231,32 +252,53 @@ def plot_results(df, output_dir, dist_label=""):
     metrics = ["bias", "variance", "rmse"]
     families = _classify_methods(df)
 
-    n_panels = len(FAMILY_ORDER)
+    # Build panel order: base families + beta_smooth if present
+    family_order = list(FAMILY_ORDER_BASE)
+    if "beta_smooth" in families:
+        family_order.append("beta_smooth")
+
+    n_panels = len(family_order)
     total_plots = len(metrics) * len(betas)
-    print(f"\nGenerating {total_plots} triptych plots (3 panels each) ...")
+    print(f"\nGenerating {total_plots} triptych plots ({n_panels} panels each) ...")
+
+    has_beta_smooth = "beta_smooth" in families
+    n_base = len(FAMILY_ORDER_BASE)
 
     for metric in metrics:
         for beta in betas:
             df_beta = df[df["beta"] == beta]
             v_star = df_beta["v_star"].iloc[0]
 
-            # Create figure with shared y-axis.
-            # Width: 18 inches × 100 DPI = 1800 px (within 2000 limit)
-            fig, axes = plt.subplots(
-                1, n_panels,
-                figsize=(18, 5),
-                sharey=True,
-            )
+            if has_beta_smooth and n_panels > 1:
+                # First n_base panels share y-axis; Beta-Smoothed gets its own
+                import matplotlib.gridspec as gridspec
+                fig = plt.figure(figsize=(6 * n_panels, 5))
+                gs = gridspec.GridSpec(1, n_panels, figure=fig)
 
-            for col_idx, family_name in enumerate(FAMILY_ORDER):
+                axes = []
+                ax0 = fig.add_subplot(gs[0, 0])
+                axes.append(ax0)
+                for i in range(1, n_base):
+                    axes.append(fig.add_subplot(gs[0, i], sharey=ax0))
+                # Beta-Smoothed panel: independent y-axis
+                axes.append(fig.add_subplot(gs[0, n_base]))
+            else:
+                fig, axes_arr = plt.subplots(
+                    1, n_panels,
+                    figsize=(6 * n_panels, 5),
+                    sharey=True,
+                )
+                axes = [axes_arr] if n_panels == 1 else list(axes_arr)
+
+            for col_idx, family_name in enumerate(family_order):
                 ax = axes[col_idx]
                 family_items = families[family_name]
                 short_title = FAMILY_SHORT_TITLES[family_name]
 
-                # Only show y-axis label on leftmost panel
+                show_ylabel = (col_idx == 0) or (has_beta_smooth and col_idx == n_base)
                 _plot_one(
                     ax, df_beta, metric, family_items,
-                    show_ylabel=(col_idx == 0),
+                    show_ylabel=show_ylabel,
                 )
                 ax.set_title(short_title, fontsize=11, fontweight="bold")
                 ax.tick_params(axis="both", labelsize=9)

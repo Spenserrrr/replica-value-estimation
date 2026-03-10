@@ -23,6 +23,7 @@ from src.estimators import (
     estimate_lme,
     estimate_single_replica,
     estimate_multi_n_slope,
+    estimate_beta_smoothed,
 )
 from src.metrics import compute_all_metrics
 
@@ -34,6 +35,7 @@ def run_single_trial(
     n_tot: int,
     single_n_values: list,
     multi_n_sets: list,
+    beta_smooth_priors: list = None,
 ) -> dict:
     """
     Run a single Monte Carlo trial: draw N_tot samples and compute all estimators.
@@ -54,11 +56,15 @@ def run_single_trial(
         Replica orders to test for single-replica estimator (e.g., [2, 3, 4, 5, 8]).
     multi_n_sets : list of lists
         Sets of replica orders for multi-n slope estimators (e.g., [[2,3,4], [2,4,6,8]]).
+    beta_smooth_priors : list of (name, alpha, gamma) tuples, optional
+        Beta-smoothed estimator configurations. Each tuple gives a display name
+        and the two Beta prior hyperparameters. Only valid for Bernoulli rewards.
+        Example: [("laplace", 1.0, 1.0), ("jeffreys", 0.5, 0.5)]
 
     Returns
     -------
     dict
-        Keys: 'lme', 'single_n2', 'single_n3', ..., 'multi_[2,3,4]', 'multi_[2,3,4]_jk', ...
+        Keys: 'lme', 'single_n2', ..., 'beta_smooth_laplace', ...
         Values: estimated V* from each method configuration.
     """
     # Draw N_tot i.i.d. reward samples using the provided sample function
@@ -82,6 +88,13 @@ def run_single_trial(
             rewards, beta, orders, use_jackknife=True
         )
 
+    # Beta-smoothed estimators (Bernoulli only)
+    if beta_smooth_priors:
+        for name, alpha, gamma in beta_smooth_priors:
+            results[f"beta_smooth_{name}"] = estimate_beta_smoothed(
+                rewards, beta, alpha=alpha, gamma=gamma
+            )
+
     return results
 
 
@@ -95,6 +108,7 @@ def run_experiment(
     multi_n_sets: list,
     seed: int,
     extra_columns: dict = None,
+    beta_smooth_priors: list = None,
 ) -> pd.DataFrame:
     """
     Run the full experiment sweep over (beta, N_tot) configurations.
@@ -126,6 +140,9 @@ def run_experiment(
         Additional columns to add to every row of the output DataFrame.
         Useful for tagging results with distribution parameters,
         e.g., {"p": 0.1} for Bernoulli.
+    beta_smooth_priors : list of (name, alpha, gamma) tuples, optional
+        Beta-smoothed estimator configurations (Bernoulli rewards only).
+        Example: [("laplace", 1.0, 1.0), ("jeffreys", 0.5, 0.5)]
 
     Returns
     -------
@@ -151,7 +168,8 @@ def run_experiment(
             all_trial_results = []
             for t in range(t_trials):
                 trial_results = run_single_trial(
-                    rng, sample_fn, beta, n_tot, single_n_values, multi_n_sets
+                    rng, sample_fn, beta, n_tot, single_n_values, multi_n_sets,
+                    beta_smooth_priors=beta_smooth_priors,
                 )
                 all_trial_results.append(trial_results)
 

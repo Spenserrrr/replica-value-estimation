@@ -17,6 +17,7 @@ from src.estimators import (
     estimate_lme,
     estimate_single_replica,
     estimate_multi_n_slope,
+    estimate_beta_smoothed,
 )
 from src.metrics import compute_all_metrics
 
@@ -70,7 +71,11 @@ def _run_trials_for_prompt(
 # Build estimator configs from user-specified parameters
 # =============================================================================
 
-def build_estimator_configs(single_n_values: list, multi_n_sets: list) -> list:
+def build_estimator_configs(
+    single_n_values: list,
+    multi_n_sets: list,
+    beta_smooth_priors: list = None,
+) -> list:
     """
     Build a list of (name, callable) estimator configs.
 
@@ -81,6 +86,8 @@ def build_estimator_configs(single_n_values: list, multi_n_sets: list) -> list:
     single_n_values : e.g. [4, 8]
     multi_n_sets : e.g. [[2,4,6,8], [2,3,4]]
         For each set, both plain and jackknife versions are created.
+    beta_smooth_priors : list of (name, alpha, gamma) tuples, optional
+        Beta-smoothed estimator configs (Bernoulli only).
 
     Returns
     -------
@@ -110,6 +117,14 @@ def build_estimator_configs(single_n_values: list, multi_n_sets: list) -> list:
             lambda r, b, _o=orders: estimate_multi_n_slope(r, b, _o, use_jackknife=True),
         ))
 
+    # Beta-smoothed estimators (Bernoulli only)
+    if beta_smooth_priors:
+        for name, alpha, gamma in beta_smooth_priors:
+            configs.append((
+                f"beta_smooth_{name}",
+                lambda r, b, _a=alpha, _g=gamma: estimate_beta_smoothed(r, b, alpha=_a, gamma=_g),
+            ))
+
     return configs
 
 
@@ -127,6 +142,7 @@ def run_experiment2(
     multi_n_sets: list,
     seed: int,
     beta2: float = 1e-3,
+    beta_smooth_priors: list = None,
 ) -> pd.DataFrame:
     """
     Run the full Experiment 2 sweep.
@@ -146,6 +162,8 @@ def run_experiment2(
     multi_n_sets : Order sets for multi-n slope estimators.
     seed : Random seed.
     beta2 : Stage 2 KL coefficient for advantage distortion (default 1e-3).
+    beta_smooth_priors : list of (name, alpha, gamma) tuples, optional
+        Beta-smoothed estimator configurations (Bernoulli only).
 
     Returns
     -------
@@ -159,7 +177,9 @@ def run_experiment2(
     rng = np.random.default_rng(seed)
     M = len(p_array)
 
-    estimator_configs = build_estimator_configs(single_n_values, multi_n_sets)
+    estimator_configs = build_estimator_configs(
+        single_n_values, multi_n_sets, beta_smooth_priors=beta_smooth_priors
+    )
     method_names = [name for name, _ in estimator_configs]
 
     total_configs = len(betas) * len(n_samples_values)
