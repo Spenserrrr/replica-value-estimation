@@ -1,15 +1,16 @@
-# Replica Trick Estimators for V* (Offline Estimation)
+# V* Estimation and Policy Learning for A*PO
 
-Implementation of replica trick-based estimators for offline estimation of V* in the A*PO algorithm framework.
+Implementation of V* estimators and policy learning experiments for the A*PO algorithm framework.
 
 ## Overview
 
-This repository contains the implementation and experiments for my senior thesis on **replica trick estimators** for offline value function estimation under KL-regularized control. The code implements and compares four estimator families:
+This repository contains the implementation and experiments for my senior thesis on **offline value function estimation** under KL-regularized control. The code implements and compares multiple estimator families and studies their downstream impact on policy learning:
 
-1. **LME (Log-Mean-Exp)** — Baseline biased estimator
+1. **LME (Log-Mean-Exp)** — Baseline biased estimator (A*PO default)
 2. **Single-Replica** — Fixed replica order n > 1
 3. **Multi-n Slope** — Linear extrapolation across multiple replica orders
 4. **Multi-n Slope + Jackknife** — Slope estimator with delete-one jackknife bias correction
+5. **Beta-Smoothed** — Bayesian shrinkage for Bernoulli pass rates (Laplace, Jeffreys priors)
 
 ## Repository Structure
 
@@ -17,26 +18,24 @@ This repository contains the implementation and experiments for my senior thesis
 .
 ├── src/
 │   ├── __init__.py            # Package marker
-│   ├── estimators.py          # Core V* estimators (distribution-agnostic)
-│   ├── ground_truth.py        # Analytical V* for Gaussian and Bernoulli
+│   ├── estimators.py          # Core V* estimators (LME, replica, beta-smooth)
+│   ├── ground_truth.py        # Analytical V* for Gaussian and Bernoulli + prompt generation
 │   ├── metrics.py             # Bias, variance, RMSE metrics
-│   ├── experiment_runner.py   # Generic Monte Carlo experiment runner
-│   └── plotting.py            # Triptych plot generation
+│   ├── exp1_runner.py         # Experiment 1: scalar Monte Carlo runner
+│   ├── exp1_plotting.py       # Experiment 1: triptych plot generation
+│   ├── exp2_runner.py         # Experiment 2: contextual bandit runner
+│   ├── exp2_plotting.py       # Experiment 2: calibration plots + CSV tables
+│   ├── exp3_runner.py         # Experiment 3: Stage 2 policy learning runner
+│   └── exp3_plotting.py       # Experiment 3: training curves + policy plots
 ├── run_experiment1_gaussian.py    # Experiment 1a: Gaussian rewards
 ├── run_experiment1_bernoulli.py   # Experiment 1b: Bernoulli rewards
+├── run_experiment2.py             # Experiment 2: contextual bandit V* estimation
+├── run_experiment3.py             # Experiment 3: policy learning in the toy bandit
 ├── results/
-│   ├── gaussian/
-│   │   └── 2026-02-11_21-34-10/  # Timestamped run
-│   │       ├── config.json       # Full config snapshot
-│   │       ├── results.csv       # Numerical results
-│   │       └── *.png             # Triptych plots
-│   └── bernoulli/
-│       └── 2026-02-11_21-35-00/
-│           ├── config.json
-│           ├── results.csv
-│           ├── p0.01/            # Plots for p=0.01
-│           ├── p0.05/
-│           └── ...
+│   ├── gaussian/                  # Experiment 1a outputs
+│   ├── bernoulli/                 # Experiment 1b outputs
+│   ├── experiment2/               # Experiment 2 outputs
+│   └── experiment3/               # Experiment 3 outputs
 ├── requirements.txt           # Python dependencies
 ├── .gitignore
 └── README.md
@@ -104,46 +103,68 @@ python run_experiment1_bernoulli.py
 - 1000 Monte Carlo trials
 - Same estimator configurations as Gaussian
 
-**Output:** `results/bernoulli/<timestamp>/` — 9 triptych plots per p value (45 total) + CSV + config.json
+**Output:** `results/bernoulli/<timestamp>/` — triptych plots per p value + CSV + config.json
 
-## Understanding the Plots
+### Experiment 2: Contextual Bandit V* Estimation
 
-Each plot is a **triptych** — three side-by-side panels sharing the same y-axis:
+Multi-prompt setting: M prompts with pass rates drawn from Beta distributions.
+Evaluates calibration, stratified bias/RMSE, win rates, and advantage distortion.
 
-| Left Panel | Middle Panel | Right Panel |
-|---|---|---|
-| Single-Replica estimators | Multi-n Slope estimators | Multi-n Slope + Jackknife |
+```bash
+# Quick test
+python run_experiment2.py --quick
 
-**LME (baseline)** appears as a solid black line in every panel for reference.
+# Full experiment
+python run_experiment2.py
+```
 
-- **Bias plots**: How far estimates are from true V* (closer to 0 is better)
-- **Variance plots**: Spread of estimates across trials (log scale; lower is better)
-- **RMSE plots**: Overall error combining bias and variance (log scale; lower is better)
+**Configuration:**
+- Two difficulty regimes: Hard — Beta(1, 8), Moderate — Beta(2, 5)
+- β ∈ {0.5}, N ∈ {4, 8, 16, 32, 64}
+- M = 500 prompts, T = 200 Monte Carlo trials
+- Estimators: LME, selected replica methods, Beta-smooth (Laplace, Jeffreys)
+
+**Output:** `results/experiment2/<timestamp>/` — calibration plots (scatter + binned) + CSV tables
+
+### Experiment 3: Policy Learning in the Toy Bandit
+
+Simulates A*PO's full two-stage pipeline in the binary contextual bandit:
+- **Stage 1:** Estimate V*(x) using N Bernoulli samples
+- **Stage 2:** Train a shared-parameter policy q(x; w, b) = σ(w · logit(p_x) + b) via on-policy SGD
+
+The beta mismatch between stages is eliminated by recomputing V* at β₂ from the estimated pass rate.
+
+```bash
+# Quick test (~1 second)
+python run_experiment3.py --quick
+
+# Full experiment (~5-10 minutes)
+python run_experiment3.py
+```
+
+**Configuration:**
+- Two difficulty regimes: Hard — Beta(1, 8), Moderate — Beta(2, 5)
+- β₂ = 0.5, N = 8, M = 500 prompts
+- T = 200 MC trials, 1000 SGD steps per trial
+- Estimators: LME, Jeffreys Beta-smooth, Oracle
+- Optimal policy: (w*, b*) = (1.0, 2.0)
+
+**Output:** `results/experiment3/<timestamp>/` — training loss curves, parameter trajectories, policy scatter + CSV tables
 
 ## Code Architecture
 
 The codebase is designed to be **modular and distribution-agnostic**:
 
-- **`src/estimators.py`** — All four estimators. They take raw reward arrays and don't know the underlying distribution.
-- **`src/experiment_runner.py`** — Generic Monte Carlo loop. Parametrized by `sample_fn(rng, n_tot)` and `v_star_fn(beta)`.
-- **`src/plotting.py`** — Triptych plotting code. Works with any DataFrame in the standard format.
-- **Experiment scripts** — Thin wrappers that define the distribution-specific configuration and call the runner.
-
-To add a new reward distribution, you only need:
-1. Add ground-truth functions to `src/ground_truth.py`
-2. Write a thin experiment script (follow `run_experiment1_bernoulli.py` as a template)
-
-## CSV Data Format
-
-The results CSV contains:
-- `beta`: KL regularization parameter
-- `n_tot`: Sample budget
-- `method`: Estimator name (e.g., "lme", "single_n2", "multi_[2,3,4]_jk")
-- `bias`, `variance`, `rmse`: Evaluation metrics
-- `v_star`: Ground truth V*
-- `mean_estimate`: Average estimate across trials
-- `n_valid`: Number of valid (non-NaN) estimates
-- `p` (Bernoulli only): Success probability
+- **`src/estimators.py`** — All estimators (LME, replica, beta-smooth). They take raw reward arrays and don't know the underlying distribution.
+- **`src/ground_truth.py`** — Analytical V* for Gaussian/Bernoulli, prompt generation and strata assignment.
+- **`src/metrics.py`** — Bias, variance, RMSE computation.
+- **`src/exp1_runner.py`** — Generic Monte Carlo loop for scalar V* estimation.
+- **`src/exp1_plotting.py`** — Triptych plots for Experiment 1.
+- **`src/exp2_runner.py`** — Contextual bandit runner (per-prompt trials).
+- **`src/exp2_plotting.py`** — Calibration plots and stratified CSV tables for Experiment 2.
+- **`src/exp3_runner.py`** — Stage 1 estimation + Stage 2 SGD policy learning.
+- **`src/exp3_plotting.py`** — Training curves, parameter trajectories, and policy scatter for Experiment 3.
+- **Experiment scripts** — Thin wrappers that define configuration and call the runners.
 
 ## Troubleshooting
 
