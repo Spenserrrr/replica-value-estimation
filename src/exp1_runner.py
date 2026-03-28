@@ -1,18 +1,10 @@
 """
-Generic Monte Carlo experiment runner for V* estimators.
+Monte Carlo runner for V* estimators.
 
-This module provides a distribution-agnostic runner that:
-1. Draws samples using a provided sample function
-2. Applies all configured estimators (LME, single-replica, multi-n slope)
-3. Collects metrics (bias, variance, RMSE) across T independent trials
-4. Returns results as a pandas DataFrame
-
-The runner is parametrized by:
-    - sample_fn(rng, n_tot) -> np.ndarray : draws n_tot i.i.d. reward samples
-    - v_star_fn(beta) -> float            : returns ground-truth V* for given beta
-
-This design allows the same runner to handle Gaussian, Bernoulli, or any
-other reward distribution without modification.
+Draws i.i.d. rewards via ``sample_fn``, runs LME, single-replica, multi-n slope,
+and optional beta-smoothed estimators on the same samples, then aggregates bias,
+variance, and RMSE over T trials. Parametrized by ``sample_fn`` and ``v_star_fn``
+so Gaussian, Bernoulli, or other rewards reuse the same code path.
 """
 
 import time
@@ -38,49 +30,22 @@ def run_single_trial(
     beta_smooth_priors: list = None,
 ) -> dict:
     """
-    Run a single Monte Carlo trial: draw N_tot samples and compute all estimators.
+    One trial: draw ``n_tot`` rewards, run all estimators on that draw.
 
-    Each estimator receives the SAME N_tot i.i.d. reward samples for fair comparison.
-
-    Parameters
-    ----------
-    rng : np.random.Generator
-        Random number generator (for reproducibility).
-    sample_fn : callable(rng, n_tot) -> np.ndarray
-        Function that draws n_tot i.i.d. reward samples.
-    beta : float
-        KL regularization parameter.
-    n_tot : int
-        Total sample budget.
-    single_n_values : list of int
-        Replica orders to test for single-replica estimator (e.g., [2, 3, 4, 5, 8]).
-    multi_n_sets : list of lists
-        Sets of replica orders for multi-n slope estimators (e.g., [[2,3,4], [2,4,6,8]]).
-    beta_smooth_priors : list of (name, alpha, gamma) tuples, optional
-        Beta-smoothed estimator configurations. Each tuple gives a display name
-        and the two Beta prior hyperparameters. Only valid for Bernoulli rewards.
-        Example: [("laplace", 1.0, 1.0), ("jeffreys", 0.5, 0.5)]
-
-    Returns
-    -------
-    dict
-        Keys: 'lme', 'single_n2', ..., 'beta_smooth_laplace', ...
-        Values: estimated V* from each method configuration.
+    All methods share the same reward vector. ``beta_smooth_priors`` is
+    ``(name, alpha, gamma)`` tuples for Bernoulli-only beta smoothing.
     """
-    # Draw N_tot i.i.d. reward samples using the provided sample function
     rewards = sample_fn(rng, n_tot)
 
     results = {
         "lme": estimate_lme(rewards, beta),
     }
 
-    # Test each single-replica order
     for n in single_n_values:
         results[f"single_n{n}"] = estimate_single_replica(rewards, beta, n)
 
-    # Test each multi-n set (with and without jackknife)
     for orders in multi_n_sets:
-        set_key = str(orders)  # e.g., "[2, 3, 4, 5]"
+        set_key = str(orders)
         results[f"multi_{set_key}"] = estimate_multi_n_slope(
             rewards, beta, orders, use_jackknife=False
         )
@@ -88,7 +53,6 @@ def run_single_trial(
             rewards, beta, orders, use_jackknife=True
         )
 
-    # Beta-smoothed estimators (Bernoulli only)
     if beta_smooth_priors:
         for name, alpha, gamma in beta_smooth_priors:
             results[f"beta_smooth_{name}"] = estimate_beta_smoothed(
@@ -111,45 +75,9 @@ def run_experiment(
     beta_smooth_priors: list = None,
 ) -> pd.DataFrame:
     """
-    Run the full experiment sweep over (beta, N_tot) configurations.
+    Sweep (beta, n_tot): T trials each, metrics vs. ``v_star_fn(beta)``.
 
-    For each (beta, N_tot), runs T independent Monte Carlo trials, computes
-    all estimator outputs, and then evaluates bias, variance, and RMSE
-    against the ground-truth V*.
-
-    Parameters
-    ----------
-    sample_fn : callable(rng, n_tot) -> np.ndarray
-        Draws n_tot i.i.d. reward samples. The rng argument ensures
-        reproducibility.
-    v_star_fn : callable(beta) -> float
-        Returns the ground-truth V* for a given beta.
-    betas : list of float
-        KL regularization parameters to sweep.
-    n_tot_values : list of int
-        Sample budgets to sweep.
-    t_trials : int
-        Number of Monte Carlo trials per (beta, N_tot) configuration.
-    single_n_values : list of int
-        Replica orders for single-replica estimator.
-    multi_n_sets : list of lists
-        Sets of replica orders for multi-n slope estimators.
-    seed : int
-        Random seed for reproducibility.
-    extra_columns : dict, optional
-        Additional columns to add to every row of the output DataFrame.
-        Useful for tagging results with distribution parameters,
-        e.g., {"p": 0.1} for Bernoulli.
-    beta_smooth_priors : list of (name, alpha, gamma) tuples, optional
-        Beta-smoothed estimator configurations (Bernoulli rewards only).
-        Example: [("laplace", 1.0, 1.0), ("jeffreys", 0.5, 0.5)]
-
-    Returns
-    -------
-    pd.DataFrame
-        Results table with columns:
-        [beta, n_tot, method, bias, variance, rmse, v_star, mean_estimate, n_valid]
-        Plus any extra_columns.
+    ``extra_columns`` is merged into every row (e.g. tagging Bernoulli p).
     """
     rng = np.random.default_rng(seed)
     results = []
@@ -164,7 +92,6 @@ def run_experiment(
             config_idx += 1
             t_start = time.time()
 
-            # Run T trials and collect all method estimates
             all_trial_results = []
             for t in range(t_trials):
                 trial_results = run_single_trial(
@@ -173,10 +100,8 @@ def run_experiment(
                 )
                 all_trial_results.append(trial_results)
 
-            # Get all method names from first trial
             method_names = list(all_trial_results[0].keys())
 
-            # Compute metrics for each method
             for method in method_names:
                 estimates = np.array([trial[method] for trial in all_trial_results])
                 metrics = compute_all_metrics(estimates, v_star)
@@ -193,7 +118,6 @@ def run_experiment(
                     "mean_estimate": np.nanmean(estimates),
                     "n_valid": int(n_valid),
                 }
-                # Add any extra columns (e.g., distribution parameters)
                 if extra_columns:
                     row.update(extra_columns)
                 results.append(row)
@@ -206,4 +130,3 @@ def run_experiment(
             )
 
     return pd.DataFrame(results)
-

@@ -1,30 +1,11 @@
 #!/usr/bin/env python3
 """
-Experiment 3: Policy Learning in the Toy Bandit
-
-Simulates A*PO's full two-stage pipeline in the binary contextual bandit:
-  Stage 1: Estimate V*(x) for each prompt using N Bernoulli samples.
-  Stage 2: Train a shared-parameter policy via on-policy SGD using
-           advantage targets r - V_hat(x).
-
-The policy is: q(x; w, b) = sigmoid(w * logit(p_x) + b)
-At (w=1, b=0): reference policy.  At (w=1, b=1/beta2): optimal policy.
-
-Loss modes:
-    - MSE:   standard squared error against point target
-    - CAMeL: interval-target loss using Bayesian credible intervals
-
-Conditions compared:
-    1. LME (MSE)      — A*PO's standard estimator with MSE loss
-    2. Jeffreys (MSE)  — Beta-smooth with Jeffreys prior, MSE loss
-    3. Oracle (MSE)    — True pass rate, MSE loss (upper bound)
-    4. CAMeL 90% CI    — Jeffreys posterior interval, CAMeL loss
+Experiment 3: two-stage toy bandit — Stage 1 V*(x), Stage 2 SGD on advantages (LME, Jeffreys, oracle, CAMeL).
 
 Usage:
-    python run_experiment3.py           # Full experiment
-    python run_experiment3.py --quick   # Fast test run
+    python run_experiment3.py [--quick] [--exclude-camel]
 
-Each run is saved to: results/experiment3/YYYY-MM-DD_HH-MM-SS/
+Outputs: results/experiment3/YYYY-MM-DD_HH-MM-SS/
 """
 
 import os
@@ -42,10 +23,6 @@ from src.exp3_runner import run_experiment3
 from src.exp3_plotting import generate_all_exp3_outputs
 
 
-# =============================================================================
-# Experiment Configuration
-# =============================================================================
-
 DIFFICULTY_REGIMES = {
     "hard":     {"a": 1.0, "b": 8.0, "label": "Hard — Beta(1, 8)"},
     "moderate": {"a": 2.0, "b": 5.0, "label": "Moderate — Beta(2, 5)"},
@@ -59,7 +36,7 @@ T_SGD = 5000
 LR = 0.0005
 SEED = 42
 
-# Each condition specifies the Stage 1 estimator and Stage 2 loss mode.
+# Per row: Stage 1 estimator key and Stage 2 loss mode (see exp3_runner).
 CONDITIONS = [
     {"name": "lme",      "estimator": "lme",      "loss_mode": "mse"},
     {"name": "jeffreys", "estimator": "jeffreys",  "loss_mode": "mse"},
@@ -71,9 +48,6 @@ BASE_RESULTS_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "results", "experiment3"
 )
 
-# =============================================================================
-# Quick mode
-# =============================================================================
 
 QUICK_CONDITIONS = [
     {"name": "lme",      "estimator": "lme",      "loss_mode": "mse"},
@@ -91,10 +65,6 @@ QUICK_CONFIG = {
 }
 
 
-# =============================================================================
-# Entry point
-# =============================================================================
-
 def main():
     parser = argparse.ArgumentParser(
         description="Experiment 3: Policy Learning in the Toy Bandit"
@@ -102,6 +72,10 @@ def main():
     parser.add_argument(
         "--quick", action="store_true",
         help="Run a reduced configuration for quick testing.",
+    )
+    parser.add_argument(
+        "--exclude-camel", action="store_true",
+        help="Exclude CAMeL conditions from the run.",
     )
     args = parser.parse_args()
 
@@ -118,6 +92,10 @@ def main():
         t_trials = T_TRIALS
         t_sgd = T_SGD
         conditions = CONDITIONS
+
+    if args.exclude_camel:
+        conditions = [c for c in conditions if not c["name"].startswith("camel")]
+        print("=== CAMeL conditions excluded ===")
 
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     run_dir = os.path.join(BASE_RESULTS_DIR, timestamp)

@@ -1,20 +1,10 @@
 """
-Experiment 3 runner: policy learning in the toy bandit.
+Experiment 3: toy contextual bandit, two-stage policy learning (A*PO Stage 2).
 
-Simulates A*PO's Stage 2 in the binary contextual bandit:
-  1. Stage 1: estimate V*(x) for each prompt using N Bernoulli samples.
-  2. Stage 2: train a shared-parameter policy via on-policy SGD,
-     using the estimated V* in the regression targets r - V_hat(x).
-
-Supports two loss modes:
-  - MSE:   standard squared error  (z - target)^2
-  - CAMeL: interval-target loss    d(z, [ℓ, u])^2
-           where the interval comes from a Bayesian credible interval
-           on V*(x) via the Jeffreys Beta posterior.
-
-The shared policy is parameterized as:
-    q(x; w, b) = sigmoid(w * logit(p_x) + b)
-where (w, b) are two learnable parameters shared across all M prompts.
+Stage 1 estimates V*(x) from N Bernoulli samples per prompt. Stage 2 trains
+shared parameters q(x)=sigmoid(w·logit(p_x)+b) with on-policy SGD on targets
+r - V_hat(x). Loss modes: MSE on a point estimate, or CAMeL (interval target
+from Jeffreys Beta credible intervals on p_x).
 """
 
 import time
@@ -25,33 +15,25 @@ from scipy.stats import beta as beta_dist
 from src.ground_truth import compute_v_star_bernoulli_vec
 
 
-# =============================================================================
-# Sigmoid and logit helpers
-# =============================================================================
-
 def _sigmoid(z):
     """Numerically stable sigmoid."""
     return np.where(z >= 0, 1.0 / (1.0 + np.exp(-z)), np.exp(z) / (1.0 + np.exp(z)))
 
 
 def _logit(p):
-    """Log-odds: logit(p) = ln(p / (1-p)). Clips to avoid inf."""
+    """Log-odds; clip p to avoid inf."""
     p_clipped = np.clip(p, 1e-10, 1.0 - 1e-10)
     return np.log(p_clipped / (1.0 - p_clipped))
 
 
 def _p_to_vstar(p, beta2):
-    """Map pass rate(s) to V* via the Bernoulli closed form."""
+    """Bernoulli closed form V* from pass rate."""
     p_safe = np.clip(p, 1e-10, 1.0 - 1e-10)
     return beta2 * np.log(1.0 - p_safe + p_safe * np.exp(1.0 / beta2))
 
 
-# =============================================================================
-# Stage 1: estimate V*(x) for each prompt
-# =============================================================================
-
 def _draw_stage1_samples(rng, p_array, n_samples):
-    """Draw N Bernoulli samples per prompt. Returns k (successes per prompt)."""
+    """Bernoulli samples per prompt; returns success counts k (length M)."""
     M = len(p_array)
     rewards = rng.binomial(1, p_array[:, None] * np.ones((M, n_samples)))
     return rewards.sum(axis=1).astype(float)
@@ -59,10 +41,9 @@ def _draw_stage1_samples(rng, p_array, n_samples):
 
 def estimate_v_star_stage1(rng, p_array, n_samples, beta2, estimator):
     """
-    Stage 1: draw N Bernoulli samples per prompt, estimate p, then compute
-    V_hat at beta2 via the closed form (eliminating beta mismatch).
+    Stage 1: sample, estimate p, map to V_hat at beta2 (no beta mismatch vs. Stage 2).
 
-    Returns v_hat, shape (M,).
+    ``estimator``: ``oracle`` | ``lme`` | ``jeffreys``.
     """
     if estimator == "oracle":
         return compute_v_star_bernoulli_vec(p_array, beta2)
@@ -81,24 +62,14 @@ def estimate_v_star_stage1(rng, p_array, n_samples, beta2, estimator):
 
 def estimate_v_star_with_interval(rng, p_array, n_samples, beta2, confidence=0.90):
     """
-    Stage 1 with Bayesian credible interval (Jeffreys posterior).
+    Jeffreys posterior Beta(k+0.5, N-k+0.5); map credible interval for p through V*.
 
-    Draws N samples per prompt, then constructs a (1-alpha) credible interval
-    for p_x from the Beta(k+0.5, N-k+0.5) posterior and maps it through
-    the V* formula.
-
-    Returns
-    -------
-    v_hat : shape (M,), Jeffreys point estimate.
-    v_lower : shape (M,), lower bound of V* interval.
-    v_upper : shape (M,), upper bound of V* interval.
+    V* is monotone in p, so the p-interval maps to [v_lower, v_upper].
     """
     k = _draw_stage1_samples(rng, p_array, n_samples)
 
-    # Jeffreys point estimate
     p_hat = (k + 0.5) / (n_samples + 1.0)
 
-    # Jeffreys posterior: Beta(k + 0.5, N - k + 0.5)
     alpha_post = k + 0.5
     beta_post = n_samples - k + 0.5
 
@@ -106,20 +77,11 @@ def estimate_v_star_with_interval(rng, p_array, n_samples, beta2, confidence=0.9
     p_lower = beta_dist.ppf(alpha_level, alpha_post, beta_post)
     p_upper = beta_dist.ppf(1.0 - alpha_level, alpha_post, beta_post)
 
-    # V* is monotone increasing in p, so the interval maps directly
     return _p_to_vstar(p_hat, beta2), _p_to_vstar(p_lower, beta2), _p_to_vstar(p_upper, beta2)
 
 
-# =============================================================================
-# Stage 2: MSE loss (standard)
-# =============================================================================
-
 def _compute_mse_loss_and_grad(w, b, logit_p, p_array, v_hat, beta2, rng):
-    """
-    One SGD step with MSE loss: (log_ratio - target)^2.
-
-    Returns loss, grad_w, grad_b.
-    """
+    """One SGD step: MSE (log_ratio - (r - v_hat))^2."""
     z = w * logit_p + b
     q = _sigmoid(z)
 
@@ -143,18 +105,10 @@ def _compute_mse_loss_and_grad(w, b, logit_p, p_array, v_hat, beta2, rng):
     return loss, grad_w, grad_b
 
 
-# =============================================================================
-# Stage 2: CAMeL loss (interval-target)
-# =============================================================================
-
 def _compute_camel_loss_and_grad(w, b, logit_p, p_array, v_lower, v_upper, beta2, rng):
     """
-    One SGD step with CAMeL loss: d(z, [ℓ, u])^2.
-
-    The target interval is [r - v_upper, r - v_lower] for each prompt.
-    When the log-ratio falls inside the interval, loss and gradient are zero.
-
-    Returns loss, grad_w, grad_b.
+    Interval target [r - v_upper, r - v_lower]; squared distance outside the band,
+    zero gradient inside (dead zone).
     """
     z = w * logit_p + b
     q = _sigmoid(z)
@@ -167,11 +121,9 @@ def _compute_camel_loss_and_grad(w, b, logit_p, p_array, v_lower, v_upper, beta2
         beta2 * np.log(np.clip((1.0 - q) / (1.0 - p_array), 1e-30, None)),
     )
 
-    # Target interval: [r - v_upper, r - v_lower]
     target_lo = r - v_upper
     target_hi = r - v_lower
 
-    # Signed residual with dead zone inside the interval
     residual = np.where(
         log_ratio < target_lo, log_ratio - target_lo,
         np.where(log_ratio > target_hi, log_ratio - target_hi, 0.0),
@@ -187,10 +139,6 @@ def _compute_camel_loss_and_grad(w, b, logit_p, p_array, v_lower, v_upper, beta2
     return loss, grad_w, grad_b
 
 
-# =============================================================================
-# Stage 2: unified SGD driver
-# =============================================================================
-
 def run_stage2_shared(
     logit_p, p_array, beta2, t_sgd, lr, seed,
     loss_mode="mse",
@@ -199,13 +147,8 @@ def run_stage2_shared(
     record_every=10,
 ):
     """
-    Run Stage 2 SGD with the shared (w, b) policy.
-
-    Parameters
-    ----------
-    loss_mode : "mse" or "camel".
-    v_hat : shape (M,), point estimate for MSE mode.
-    v_lower, v_upper : shape (M,), interval bounds for CAMeL mode.
+    Shared (w, b) policy SGD. ``loss_mode``: ``mse`` (needs ``v_hat``) or
+    ``camel`` (needs ``v_lower``, ``v_upper``).
     """
     rng = np.random.default_rng(seed)
 
@@ -238,14 +181,8 @@ def run_stage2_shared(
     }
 
 
-# =============================================================================
-# Policy evaluation
-# =============================================================================
-
 def evaluate_policy(w, b, logit_p, p_array, beta2):
-    """
-    Evaluate a shared policy q(x; w, b) = sigmoid(w * logit(p_x) + b).
-    """
+    """Metrics for q = sigmoid(w*logit(p)+b) vs. closed-form optimal q* per prompt."""
     z = w * logit_p + b
     q = _sigmoid(z)
     q_star = p_array * np.exp(1.0 / beta2) / (p_array * np.exp(1.0 / beta2) + (1.0 - p_array))
@@ -272,28 +209,15 @@ def evaluate_policy(w, b, logit_p, p_array, beta2):
     }
 
 
-# =============================================================================
-# Main experiment runner
-# =============================================================================
-
 def run_experiment3(
     p_array, strata, beta2, n_samples, t_trials, t_sgd, lr,
     conditions, seed, record_every=10,
 ):
     """
-    Run the full Experiment 3.
+    Each condition dict: ``name``, ``estimator`` (``lme`` | ``jeffreys`` | ``oracle``),
+    ``loss_mode`` (``mse`` | ``camel``), ``confidence`` for CAMeL (ignored for MSE).
 
-    Parameters
-    ----------
-    conditions : list of dicts, each with keys:
-        "name" : display name (e.g. "lme", "jeffreys", "oracle", "camel_90").
-        "estimator" : "lme", "jeffreys", or "oracle" (Stage 1 method).
-        "loss_mode" : "mse" or "camel".
-        "confidence" : float, CI level for CAMeL (e.g. 0.90). Ignored for MSE.
-
-    Returns
-    -------
-    dict with "summary_df", "curves", "per_prompt_df".
+    Returns ``summary_df``, ``curves``, ``per_prompt_df`` (last trial per condition).
     """
     M = len(p_array)
     logit_p = _logit(p_array)
@@ -319,7 +243,6 @@ def run_experiment3(
             stage1_rng = np.random.default_rng(trial_seed)
             sgd_seed = trial_seed + 500
 
-            # Stage 1
             if loss_mode == "camel" and est != "oracle":
                 v_hat, v_lo, v_hi = estimate_v_star_with_interval(
                     stage1_rng, p_array, n_samples, beta2, confidence
@@ -330,7 +253,6 @@ def run_experiment3(
                     record_every=record_every,
                 )
             else:
-                # MSE mode, or Oracle (zero-width interval = MSE)
                 v_hat = estimate_v_star_stage1(
                     stage1_rng, p_array, n_samples, beta2, est
                 )

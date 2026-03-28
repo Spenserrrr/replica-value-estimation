@@ -1,23 +1,12 @@
 #!/usr/bin/env python3
 """
-Experiment 1b: Bernoulli Reward Model — Pure Scalar Estimation of V*
-
-This script evaluates the same four families of V* estimators as Experiment 1a,
-but under a Bernoulli (binary) reward model:
-
-    r ~ Bernoulli(p),   r ∈ {0, 1}
-    Z  = 1 - p + p * exp(1 / beta)
-    V* = beta * log(1 - p + p * exp(1 / beta))
-
-This binary setting emphasizes the "practical" behavior of the estimators when
-successes are rare (small p), a regime analogous to difficult prompts where
-pass@N can be close to zero.
+Experiment 1b: Bernoulli V* (same estimators as 1a). Small p mimics rare successes / low pass@N.
 
 Usage:
-    python run_experiment1_bernoulli.py          # Full experiment
-    python run_experiment1_bernoulli.py --quick  # Fast test run
+    python run_experiment1_bernoulli.py
+    python run_experiment1_bernoulli.py --quick
 
-Each run is saved to a timestamped directory: results/bernoulli/YYYY-MM-DD_HH-MM-SS/
+Outputs: results/bernoulli/YYYY-MM-DD_HH-MM-SS/
 """
 
 import os
@@ -28,7 +17,6 @@ import argparse
 from datetime import datetime
 import pandas as pd
 
-# Add project root to path so we can import from src/
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from src.ground_truth import compute_v_star_bernoulli
@@ -36,51 +24,34 @@ from src.exp1_runner import run_experiment
 from src.exp1_plotting import plot_results
 
 
-# =============================================================================
-# Experiment Configuration
-# =============================================================================
-
-# ---- Bernoulli success probabilities to sweep ----
 P_VALUES = [0.01, 0.05, 0.1, 0.2, 0.5]
 
-# ---- KL regularization parameters to sweep ----
 BETAS = [0.5, 1.0, 2.0]
 
-# ---- Sample budgets to sweep ----
 N_TOT_VALUES = [4, 8, 16, 32, 64, 128, 256]
 
-# ---- Monte Carlo trials per configuration ----
 T_TRIALS = 1000
 
-# ---- Single-replica: sweep multiple replica orders ----
 SINGLE_REPLICA_N_VALUES = [2, 3, 4, 5, 8]
 
-# ---- Multi-n slope: test multiple sets of replica orders ----
 MULTI_N_ORDER_SETS = [
-    [2, 3],           # Minimal set
-    [2, 3, 4],        # Small set
-    [2, 3, 4, 5],     # Standard set
-    [2, 3, 4, 5, 6],  # Extended set
-    [2, 4, 6, 8],     # Even orders only
+    [2, 3],
+    [2, 3, 4],
+    [2, 3, 4, 5],
+    [2, 3, 4, 5, 6],
+    [2, 4, 6, 8],
 ]
 
-# ---- Beta-smoothed estimator priors (Bernoulli-specific) ----
-# Each entry: (name, alpha, gamma) for Beta(alpha, gamma) prior
+# (name, alpha, gamma) for Beta(alpha, gamma) smoothing of the success rate.
 BETA_SMOOTH_PRIORS = [
-    ("laplace", 1.0, 1.0),    # Uniform prior: p_tilde = (k+1)/(N+2)
-    ("jeffreys", 0.5, 0.5),   # Jeffreys prior: p_tilde = (k+0.5)/(N+1)
+    ("laplace", 1.0, 1.0),    # p_tilde = (k+1)/(N+2)
+    ("jeffreys", 0.5, 0.5),   # p_tilde = (k+0.5)/(N+1)
 ]
 
-# ---- Random seed for reproducibility ----
 SEED = 42
 
-# ---- Base output directory ----
 BASE_RESULTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results", "bernoulli")
 
-
-# =============================================================================
-# Quick mode (reduced config for fast iteration)
-# =============================================================================
 
 QUICK_CONFIG = {
     "p_values": [0.1, 0.5],
@@ -93,10 +64,6 @@ QUICK_CONFIG = {
 }
 
 
-# =============================================================================
-# Entry Point
-# =============================================================================
-
 def main():
     parser = argparse.ArgumentParser(
         description="Experiment 1b: Bernoulli rewards — Pure Scalar V* Estimation"
@@ -107,7 +74,6 @@ def main():
     )
     args = parser.parse_args()
 
-    # ---- Select configuration ----
     if args.quick:
         cfg = QUICK_CONFIG
         p_values = cfg["p_values"]
@@ -127,12 +93,10 @@ def main():
         multi_n_sets = MULTI_N_ORDER_SETS
         beta_smooth_priors = BETA_SMOOTH_PRIORS
 
-    # ---- Create timestamped run directory ----
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     run_dir = os.path.join(BASE_RESULTS_DIR, timestamp)
     os.makedirs(run_dir, exist_ok=True)
 
-    # ---- Save configuration snapshot ----
     config = {
         "experiment": "1b_bernoulli",
         "distribution": {"type": "bernoulli", "p_values": p_values},
@@ -148,7 +112,6 @@ def main():
     with open(os.path.join(run_dir, "config.json"), "w") as f:
         json.dump(config, f, indent=2)
 
-    # ---- Print experiment header ----
     print("=" * 60)
     print("Experiment 1b: Bernoulli Reward Model")
     print("=" * 60)
@@ -163,7 +126,6 @@ def main():
     print(f"  Random seed:             {SEED}")
     print()
 
-    # Print ground truth for each (p, beta)
     print("Ground truth V* values:")
     for p in p_values:
         for beta in betas:
@@ -171,7 +133,6 @@ def main():
             print(f"  p={p}, beta={beta}:  V* = {v_star:.6f}")
     print()
 
-    # ---- Run experiment for each p value ----
     all_dfs = []
     overall_start = time.time()
 
@@ -208,11 +169,9 @@ def main():
 
         all_dfs.append(df_p)
 
-        # Generate plots for this p value
         output_dir_p = os.path.join(run_dir, f"p{p}")
         plot_results(df_p, output_dir_p, dist_label=f"Bernoulli(p={p})")
 
-    # ---- Combine and save all results ----
     df = pd.concat(all_dfs, ignore_index=True)
     csv_path = os.path.join(run_dir, "results.csv")
     df.to_csv(csv_path, index=False)
@@ -221,7 +180,6 @@ def main():
     total_time = time.time() - overall_start
     print(f"Total experiment time: {total_time:.1f}s")
 
-    # ---- Print summary ----
     print("\n" + "=" * 60)
     print("Summary (largest N_tot, first beta, each p)")
     print("=" * 60)

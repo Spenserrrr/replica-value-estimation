@@ -1,11 +1,6 @@
 """
-Output utilities for Experiment 3: policy learning in the toy bandit.
-
-Produces:
-1. Training loss curves (PNG): loss vs SGD step for each estimator.
-2. Parameter trajectory plots (PNG): (w, b) convergence over SGD steps.
-3. Policy comparison scatter (PNG): learned q_x vs optimal q*_x per prompt.
-4. Summary tables (CSV): aggregate metrics, stratified breakdowns.
+Experiment 3 plots and tables: training loss, parameter error trajectories,
+policy scatter (q vs q*), and CSV summaries.
 """
 
 import os
@@ -40,6 +35,8 @@ ESTIMATOR_LABELS = {
 }
 STRATUM_ORDER = ["very_hard", "hard", "medium", "easy"]
 
+EXCLUDE_ESTIMATORS = {"camel_90", "camel_80", "camel_95"}
+
 
 def _est_label(est):
     return ESTIMATOR_LABELS.get(est, est)
@@ -49,24 +46,20 @@ def _est_color(est):
     return ESTIMATOR_COLORS.get(est, "#333333")
 
 
-# =============================================================================
-# 1. Training loss curves
-# =============================================================================
+def _should_include(est):
+    return est not in EXCLUDE_ESTIMATORS
+
+
+EXCLUDE_FROM_LOSS = {"oracle"}
+
 
 def plot_loss_curves(curves: dict, output_dir: str, dist_label: str = ""):
-    """
-    Plot mean training loss vs SGD step for each estimator.
-
-    Parameters
-    ----------
-    curves : dict mapping estimator name -> list of dicts with "loss_curve".
-             Each loss_curve is a list of (step, loss) tuples.
-    output_dir : directory to save the plot.
-    dist_label : label for the difficulty regime.
-    """
+    """Mean training loss vs SGD step (Oracle excluded for legibility)."""
     fig, ax = plt.subplots(figsize=(8, 5))
 
     for est in curves:
+        if not _should_include(est) or est in EXCLUDE_FROM_LOSS:
+            continue
         all_curves = curves[est]
         if not all_curves:
             continue
@@ -89,7 +82,7 @@ def plot_loss_curves(curves: dict, output_dir: str, dist_label: str = ""):
     ax.set_xlabel("SGD step")
     ax.set_ylabel("Regression loss")
     ax.set_yscale("log")
-    title = "Stage 2 Training Loss"
+    title = "Stage 2 Training Loss (LME vs Jeffreys)"
     if dist_label:
         title += f" — {dist_label}"
     ax.set_title(title)
@@ -103,21 +96,17 @@ def plot_loss_curves(curves: dict, output_dir: str, dist_label: str = ""):
     print(f"    [plot] {path}")
 
 
-# =============================================================================
-# 2. Parameter trajectory plots
-# =============================================================================
-
 def plot_param_trajectories(
     curves: dict, beta2: float, output_dir: str, dist_label: str = ""
 ):
-    """
-    Plot w and b convergence over SGD steps, with optimal values marked.
-    """
-    fig, (ax_w, ax_b) = plt.subplots(1, 2, figsize=(12, 5))
+    """Parameter error ||(w,b) - (w*,b*)||_2 over SGD steps, log scale."""
+    fig, ax = plt.subplots(figsize=(8, 5))
 
     w_star, b_star = 1.0, 1.0 / beta2
 
     for est in curves:
+        if not _should_include(est):
+            continue
         all_curves = curves[est]
         if not all_curves:
             continue
@@ -126,32 +115,25 @@ def plot_param_trajectories(
         w_matrix = np.array([[w for _, w in trial["w_curve"]] for trial in all_curves])
         b_matrix = np.array([[b for _, b in trial["b_curve"]] for trial in all_curves])
 
+        err_matrix = np.sqrt((w_matrix - w_star)**2 + (b_matrix - b_star)**2)
+
         color = _est_color(est)
-        mean_w = np.mean(w_matrix, axis=0)
-        mean_b = np.mean(b_matrix, axis=0)
+        mean_err = np.mean(err_matrix, axis=0)
+        std_err = np.std(err_matrix, axis=0)
 
-        ax_w.plot(steps, mean_w, color=color, linewidth=2, label=_est_label(est))
-        ax_b.plot(steps, mean_b, color=color, linewidth=2, label=_est_label(est))
+        ax.plot(steps, mean_err, color=color, linewidth=2, label=_est_label(est))
+        ax.fill_between(steps, mean_err - std_err, mean_err + std_err,
+                        color=color, alpha=0.15)
 
-    ax_w.axhline(w_star, color="gray", linestyle="--", linewidth=1, label=f"$w^\\star = {w_star}$")
-    ax_b.axhline(b_star, color="gray", linestyle="--", linewidth=1, label=f"$b^\\star = {b_star}$")
-
-    ax_w.set_xlabel("SGD step")
-    ax_w.set_ylabel("$w$")
-    ax_w.set_title("Weight $w$ convergence")
-    ax_w.legend(fontsize=8)
-    ax_w.grid(True, alpha=0.2)
-
-    ax_b.set_xlabel("SGD step")
-    ax_b.set_ylabel("$b$")
-    ax_b.set_title("Bias $b$ convergence")
-    ax_b.legend(fontsize=8)
-    ax_b.grid(True, alpha=0.2)
-
-    suptitle = "Parameter Trajectories"
+    ax.set_xlabel("SGD step")
+    ax.set_ylabel("Parameter error $\\| (w,b) - (w^\\star, b^\\star) \\|_2$")
+    ax.set_yscale("log")
+    title = "Parameter Error vs SGD Step"
     if dist_label:
-        suptitle += f" — {dist_label}"
-    fig.suptitle(suptitle, fontsize=13, y=1.02)
+        title += f" — {dist_label}"
+    ax.set_title(title)
+    ax.legend()
+    ax.grid(True, alpha=0.2)
     fig.tight_layout()
 
     path = os.path.join(output_dir, "param_trajectories.png")
@@ -160,19 +142,17 @@ def plot_param_trajectories(
     print(f"    [plot] {path}")
 
 
-# =============================================================================
-# 3. Policy comparison scatter
-# =============================================================================
-
 def plot_policy_scatter(per_prompt_df: pd.DataFrame, output_dir: str, dist_label: str = ""):
-    """
-    Scatter plot: learned q_x vs optimal q*_x, one panel per estimator.
-    Points colored by difficulty stratum.
-    """
-    estimators = per_prompt_df["estimator"].unique()
+    """2x2 scatter: learned q vs optimal q* per prompt, colored by stratum."""
+    estimators = [e for e in per_prompt_df["estimator"].unique() if _should_include(e)]
     n_est = len(estimators)
 
-    fig, axes = plt.subplots(1, n_est, figsize=(6 * n_est, 5.5), squeeze=False)
+    nrows, ncols = 2, 2
+    fig, axes_2d = plt.subplots(nrows, ncols, figsize=(10, 10))
+    axes_flat = axes_2d.flatten()
+
+    for i in range(n_est, nrows * ncols):
+        axes_flat[i].set_visible(False)
 
     stratum_colors = {
         "very_hard": "#d62728", "hard": "#ff7f0e",
@@ -180,7 +160,7 @@ def plot_policy_scatter(per_prompt_df: pd.DataFrame, output_dir: str, dist_label
     }
 
     for idx, est in enumerate(estimators):
-        ax = axes[0][idx]
+        ax = axes_flat[idx]
         df_e = per_prompt_df[per_prompt_df["estimator"] == est]
 
         for stratum in STRATUM_ORDER:
@@ -189,7 +169,7 @@ def plot_policy_scatter(per_prompt_df: pd.DataFrame, output_dir: str, dist_label
                 continue
             ax.scatter(
                 df_s["q_star"], df_s["q_learned"],
-                c=stratum_colors[stratum], s=15, alpha=0.5,
+                c=stratum_colors[stratum], s=20, alpha=0.5,
                 label=stratum.replace("_", " ").title(), edgecolors="none",
             )
 
@@ -203,32 +183,26 @@ def plot_policy_scatter(per_prompt_df: pd.DataFrame, output_dir: str, dist_label
         ax.set_ylim(lims)
         ax.set_xlabel("Optimal $q^\\star_x$")
         ax.set_ylabel("Learned $q(x; \\hat{w}, \\hat{b})$")
-        ax.set_title(_est_label(est), fontweight="bold")
+        ax.set_title(_est_label(est), fontweight="bold", fontsize=12)
         ax.set_aspect("equal")
         ax.grid(True, alpha=0.2)
         if idx == 0:
-            ax.legend(fontsize=7, loc="upper left", markerscale=2)
+            ax.legend(fontsize=8, loc="upper left", markerscale=2)
 
     suptitle = "Learned vs Optimal Policy"
     if dist_label:
         suptitle += f" — {dist_label}"
-    fig.suptitle(suptitle, fontsize=13, y=1.02)
-    fig.tight_layout()
+    fig.suptitle(suptitle, fontsize=14, y=0.98)
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
 
     path = os.path.join(output_dir, "policy_scatter.png")
-    fig.savefig(path, bbox_inches="tight", dpi=100)
+    fig.savefig(path, bbox_inches="tight", dpi=150)
     plt.close(fig)
     print(f"    [plot] {path}")
 
 
-# =============================================================================
-# 4. Summary tables
-# =============================================================================
-
 def compute_summary_table(summary_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Aggregate per-trial metrics into mean +/- std for each estimator.
-    """
+    """Per-estimator mean +/- std of reward, KL, objective, policy/param error."""
     rows = []
     for est, grp in summary_df.groupby("estimator"):
         rows.append({
@@ -253,9 +227,7 @@ def compute_summary_table(summary_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def compute_stratified_policy_table(per_prompt_df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Stratified per-prompt policy error for each estimator and stratum.
-    """
+    """Per (estimator, stratum): prompt count, mean q-error, mean q-learned, mean q*."""
     rows = []
     for (est, stratum), grp in per_prompt_df.groupby(["estimator", "stratum"]):
         rows.append({
@@ -270,39 +242,21 @@ def compute_stratified_policy_table(per_prompt_df: pd.DataFrame) -> pd.DataFrame
     return pd.DataFrame(rows)
 
 
-# =============================================================================
-# Main entry point
-# =============================================================================
-
 def generate_all_exp3_outputs(
-    results: dict,
-    output_dir: str,
-    beta2: float,
-    dist_label: str = "",
+    results: dict, output_dir: str, beta2: float, dist_label: str = "",
 ):
-    """
-    Generate all Experiment 3 outputs: plots and CSVs.
-
-    Parameters
-    ----------
-    results : dict returned by run_experiment3().
-    output_dir : directory to save outputs.
-    beta2 : Stage 2 temperature (for parameter trajectory reference lines).
-    dist_label : label for the difficulty regime.
-    """
+    """Write all Experiment 3 plots (loss, param error, scatter) and CSV tables."""
     os.makedirs(output_dir, exist_ok=True)
 
     summary_df = results["summary_df"]
     curves = results["curves"]
     per_prompt_df = results["per_prompt_df"]
 
-    # Plots
     print(f"\n  Generating Experiment 3 plots ...")
     plot_loss_curves(curves, output_dir, dist_label)
     plot_param_trajectories(curves, beta2, output_dir, dist_label)
     plot_policy_scatter(per_prompt_df, output_dir, dist_label)
 
-    # Tables
     print(f"\n  Computing summary tables ...")
     agg_df = compute_summary_table(summary_df)
     path = os.path.join(output_dir, "summary_metrics.csv")
@@ -314,7 +268,6 @@ def generate_all_exp3_outputs(
     strat_df.to_csv(path, index=False, float_format="%.6f")
     print(f"    [csv] {path}")
 
-    # Save raw summary
     path = os.path.join(output_dir, "trial_results.csv")
     summary_df.to_csv(path, index=False, float_format="%.6f")
     print(f"    [csv] {path}")

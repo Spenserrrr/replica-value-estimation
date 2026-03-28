@@ -1,12 +1,10 @@
 """
-Experiment 2 runner: contextual bandit simulation of A*PO Stage 1.
+Experiment 2: contextual bandit simulation (A*PO Stage 1).
 
-For each prompt x with pass rate p_x, we run T independent Monte Carlo trials.
-Each trial draws N Bernoulli(p_x) rewards and applies all configured estimators.
-Per-prompt metrics (bias, variance, RMSE) are then computed from the T estimates.
-
-The runner returns a DataFrame with one row per (beta, N, method, prompt),
-ready for calibration plotting, stratified analysis, and distortion computation.
+Per prompt x with pass rate p_x, runs T Monte Carlo trials of N Bernoulli(p_x)
+rewards and all configured estimators. Returns one row per
+(beta, N, method, prompt) with bias, variance, RMSE, advantage shift, and
+log-ratio distortion for calibration and stratified analysis.
 """
 
 import time
@@ -22,10 +20,6 @@ from src.estimators import (
 from src.metrics import compute_all_metrics
 
 
-# =============================================================================
-# Per-prompt trial runner
-# =============================================================================
-
 def _run_trials_for_prompt(
     rng: np.random.Generator,
     p_x: float,
@@ -35,26 +29,9 @@ def _run_trials_for_prompt(
     estimator_configs: list,
 ) -> dict:
     """
-    Run T independent trials for a single prompt.
-
-    For each trial: sample N rewards from Bernoulli(p_x),
-    then apply every estimator in estimator_configs.
-
-    Parameters
-    ----------
-    rng : NumPy random generator.
-    p_x : Pass rate for this prompt.
-    beta : KL regularization temperature.
-    n_samples : Number of reward samples per trial (N).
-    t_trials : Number of Monte Carlo trials (T).
-    estimator_configs : List of (name, callable) pairs.
-        Each callable takes (rewards, beta) and returns a float estimate.
-
-    Returns
-    -------
-    dict mapping method_name -> np.ndarray of shape (T,) with the T estimates.
+    T trials for one prompt: each callable in ``estimator_configs`` has
+    signature ``(rewards, beta) -> float``.
     """
-    # Pre-generate all rewards at once: shape (T, N)
     all_rewards = rng.binomial(1, p_x, size=(t_trials, n_samples)).astype(float)
 
     results = {name: np.empty(t_trials) for name, _ in estimator_configs}
@@ -67,45 +44,26 @@ def _run_trials_for_prompt(
     return results
 
 
-# =============================================================================
-# Build estimator configs from user-specified parameters
-# =============================================================================
-
 def build_estimator_configs(
     single_n_values: list,
     multi_n_sets: list,
     beta_smooth_priors: list = None,
 ) -> list:
     """
-    Build a list of (name, callable) estimator configs.
+    List of ``(name, fn)`` with ``fn(rewards, beta) -> float``.
 
-    Each callable has signature (rewards, beta) -> float.
-
-    Parameters
-    ----------
-    single_n_values : e.g. [4, 8]
-    multi_n_sets : e.g. [[2,4,6,8], [2,3,4]]
-        For each set, both plain and jackknife versions are created.
-    beta_smooth_priors : list of (name, alpha, gamma) tuples, optional
-        Beta-smoothed estimator configs (Bernoulli only).
-
-    Returns
-    -------
-    List of (name, fn) tuples.
+    Each multi-n set adds plain and jackknife slope estimators.
     """
     configs = []
 
-    # LME baseline
     configs.append(("lme", lambda r, b: estimate_lme(r, b)))
 
-    # Single-replica estimators
     for n in single_n_values:
         configs.append((
             f"single_n{n}",
             lambda r, b, _n=n: estimate_single_replica(r, b, _n),
         ))
 
-    # Multi-n slope estimators (with and without jackknife)
     for orders in multi_n_sets:
         key = str(orders)
         configs.append((
@@ -117,7 +75,6 @@ def build_estimator_configs(
             lambda r, b, _o=orders: estimate_multi_n_slope(r, b, _o, use_jackknife=True),
         ))
 
-    # Beta-smoothed estimators (Bernoulli only)
     if beta_smooth_priors:
         for name, alpha, gamma in beta_smooth_priors:
             configs.append((
@@ -127,10 +84,6 @@ def build_estimator_configs(
 
     return configs
 
-
-# =============================================================================
-# Main experiment runner
-# =============================================================================
 
 def run_experiment2(
     p_array: np.ndarray,
@@ -145,32 +98,9 @@ def run_experiment2(
     beta_smooth_priors: list = None,
 ) -> pd.DataFrame:
     """
-    Run the full Experiment 2 sweep.
+    Full sweep over beta and N; V*(x) from Bernoulli closed form per beta.
 
-    For each (beta, N), runs T trials per prompt, computes all estimators,
-    and records per-prompt metrics. Ground-truth V*(x) is computed
-    internally for each beta using the Bernoulli closed form.
-
-    Parameters
-    ----------
-    p_array : np.ndarray of shape (M,), pass rates for each prompt.
-    strata : np.ndarray of shape (M,), stratum labels per prompt.
-    betas : List of beta values to sweep.
-    n_samples_values : List of per-prompt sample budgets N.
-    t_trials : Number of Monte Carlo trials per (prompt, beta, N).
-    single_n_values : Replica orders for single-n estimators.
-    multi_n_sets : Order sets for multi-n slope estimators.
-    seed : Random seed.
-    beta2 : Stage 2 KL coefficient for advantage distortion (default 1e-3).
-    beta_smooth_priors : list of (name, alpha, gamma) tuples, optional
-        Beta-smoothed estimator configurations (Bernoulli only).
-
-    Returns
-    -------
-    pd.DataFrame with columns:
-        beta, n_samples, method, prompt_idx, p_x, stratum, v_star,
-        mean_estimate, bias, variance, rmse, n_valid,
-        advantage_shift, log_ratio_distortion
+    ``beta2`` scales log-ratio distortion ``|advantage_shift| / beta2``.
     """
     from src.ground_truth import compute_v_star_bernoulli_vec
 
@@ -187,15 +117,12 @@ def run_experiment2(
     rows = []
 
     for beta in betas:
-        # Recompute V*(x) for this beta
         v_star = compute_v_star_bernoulli_vec(p_array, beta)
 
         for n_samples in n_samples_values:
             config_idx += 1
             t_start = time.time()
 
-            # Run all prompts for this (beta, N) configuration
-            # all_estimates[method_name] = np.ndarray of shape (M, T)
             all_estimates = {name: np.empty((M, t_trials)) for name in method_names}
 
             for xi in range(M):
@@ -205,7 +132,6 @@ def run_experiment2(
                 for name in method_names:
                     all_estimates[name][xi, :] = trial_results[name]
 
-            # Compute per-prompt metrics for each method
             for name in method_names:
                 for xi in range(M):
                     estimates_t = all_estimates[name][xi, :]
@@ -213,7 +139,7 @@ def run_experiment2(
                     n_valid = int(np.sum(np.isfinite(estimates_t)))
                     mean_est = np.nanmean(estimates_t)
 
-                    # Advantage shift: V*(x) - mean_estimate = -bias
+                    # advantage_shift = V*(x) - mean_estimate = -bias
                     adv_shift = v_star[xi] - mean_est
                     log_ratio_dist = abs(adv_shift) / beta2
 

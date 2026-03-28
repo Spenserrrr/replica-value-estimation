@@ -1,14 +1,8 @@
 """
-Output utilities for Experiment 2: contextual bandit simulation.
+Experiment 2 outputs: calibration figures (PNG) and summary CSVs.
 
-Produces two types of output:
-
-1. **Calibration plots** (PNG): scatter and binned calibration curves.
-   These are inherently visual and best communicated as figures.
-
-2. **Summary tables** (CSV): stratified performance (bias, RMSE, win rate)
-   and advantage distortion. These are saved as CSVs for easy inclusion
-   as LaTeX tables in the thesis write-up.
+Calibration scatter and equal-count binned curves; stratified metrics, win rate
+vs. LME, and advantage distortion tables for LaTeX or further analysis.
 """
 
 import os
@@ -25,7 +19,6 @@ matplotlib.rcParams.update({
     "figure.dpi": 100,
 })
 
-# Stratum display order and colors
 STRATUM_ORDER = ["very_hard", "hard", "medium", "easy"]
 STRATUM_LABELS = {
     "very_hard": "Very Hard\n($p < 0.05$)",
@@ -40,7 +33,6 @@ STRATUM_COLORS = {
     "easy": "#1f77b4",
 }
 
-# Method colors for calibration overlay plots
 METHOD_COLORS = [
     "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
     "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
@@ -48,7 +40,7 @@ METHOD_COLORS = [
 
 
 def _method_label(method_name: str) -> str:
-    """Convert internal method keys to readable labels for plots/tables."""
+    """Map internal method keys to plot/table labels."""
     if method_name == "lme":
         return "LME"
     if method_name.startswith("beta_smooth_"):
@@ -66,15 +58,8 @@ def _method_label(method_name: str) -> str:
     return method_name
 
 
-# =============================================================================
-# 1. Calibration plots (visual — kept as PNG)
-# =============================================================================
-
 def plot_calibration_scatter(df, beta, n_samples, output_dir, dist_label=""):
-    """
-    Multi-panel scatter: one panel per estimator, V_hat_avg(x) vs V*(x).
-    Points are colored by difficulty stratum.
-    """
+    """One panel per method: trial-averaged V_hat vs V*, points colored by stratum."""
     df_cfg = df[(df["beta"] == beta) & (df["n_samples"] == n_samples)]
     if df_cfg.empty:
         return
@@ -100,7 +85,6 @@ def plot_calibration_scatter(df, beta, n_samples, output_dir, dist_label=""):
                 label=STRATUM_LABELS[stratum], edgecolors="none",
             )
 
-        # Diagonal reference line
         vmin = min(df_m["v_star"].min(), df_m["mean_estimate"].min())
         vmax = max(df_m["v_star"].max(), df_m["mean_estimate"].max())
         margin = (vmax - vmin) * 0.05
@@ -134,11 +118,8 @@ def plot_calibration_scatter(df, beta, n_samples, output_dir, dist_label=""):
 
 def plot_calibration_binned(df, beta, n_samples, output_dir, dist_label="", n_bins=10):
     """
-    Binned calibration curves for all estimators overlaid on one plot.
-
-    Prompts are sorted by V*(x), binned into n_bins equal-count groups, and
-    (mean_true, mean_predicted) is plotted per bin.  Axes match the scatter
-    plot convention: x = V*(x), y = V_hat(x).
+    Equal-count bins on V*(x); overlay (mean true, mean predicted) per method.
+    Axes: x = V*, y = V_hat (same convention as scatter).
     """
     df_cfg = df[(df["beta"] == beta) & (df["n_samples"] == n_samples)]
     if df_cfg.empty:
@@ -192,16 +173,8 @@ def plot_calibration_binned(df, beta, n_samples, output_dir, dist_label="", n_bi
     print(f"    [plot] {path}")
 
 
-# =============================================================================
-# 2. Stratified performance tables (CSV)
-# =============================================================================
-
 def compute_stratified_tables(df) -> pd.DataFrame:
-    """
-    Compute per-(beta, N, method, stratum) summary: mean bias, RMSE, prompt count.
-
-    Returns a single DataFrame with all configurations, ready to save as CSV.
-    """
+    """Per (beta, N, method, stratum): prompt count, mean bias/RMSE/variance."""
     rows = []
     for (beta, n_samples, method, stratum), grp in df.groupby(
         ["beta", "n_samples", "method", "stratum"]
@@ -222,10 +195,8 @@ def compute_stratified_tables(df) -> pd.DataFrame:
 
 def compute_win_rate_table(df) -> pd.DataFrame:
     """
-    Compute per-(beta, N, method, stratum) win rate over LME.
-
-    Win rate = fraction of prompts where the method has lower per-prompt RMSE
-    than LME. LME itself is excluded from the output.
+    Per (beta, N, method, stratum): fraction of prompts where method RMSE < LME.
+    LME excluded from output.
     """
     rows = []
     for (beta, n_samples), grp_cfg in df.groupby(["beta", "n_samples"]):
@@ -259,15 +230,8 @@ def compute_win_rate_table(df) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-# =============================================================================
-# 3. Advantage distortion table (CSV)
-# =============================================================================
-
 def compute_distortion_table(df) -> pd.DataFrame:
-    """
-    Compute per-(beta, N, method, stratum) mean advantage shift and log-ratio
-    distortion |delta(x)| / beta_2.
-    """
+    """Per (beta, N, method, stratum): mean advantage shift and |shift|/beta_2."""
     rows = []
     for (beta, n_samples, method, stratum), grp in df.groupby(
         ["beta", "n_samples", "method", "stratum"]
@@ -286,23 +250,13 @@ def compute_distortion_table(df) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-# =============================================================================
-# Main entry point: generate all outputs for a run
-# =============================================================================
-
 def generate_all_exp2_outputs(df, output_dir, dist_label=""):
-    """
-    Generate all Experiment 2 outputs for a results DataFrame.
-
-    - Calibration plots (PNG) for each (beta, N) configuration.
-    - Summary CSV tables for stratified metrics, win rates, and distortion.
-    """
+    """Write calibration PNGs and stratified / win-rate / distortion CSVs."""
     os.makedirs(output_dir, exist_ok=True)
 
     betas = sorted(df["beta"].unique())
     n_values = sorted(df["n_samples"].unique())
 
-    # ---- Calibration plots ----
     total = len(betas) * len(n_values)
     print(f"\n  Generating calibration plots ({total} configurations) ...")
     for beta in betas:
@@ -311,7 +265,6 @@ def generate_all_exp2_outputs(df, output_dir, dist_label=""):
             plot_calibration_scatter(df, beta, n_samples, output_dir, dist_label)
             plot_calibration_binned(df, beta, n_samples, output_dir, dist_label)
 
-    # ---- Summary tables ----
     print("\n  Computing summary tables ...")
 
     stratified_df = compute_stratified_tables(df)
@@ -331,7 +284,3 @@ def generate_all_exp2_outputs(df, output_dir, dist_label=""):
 
     plt.close("all")
     print(f"\n  All outputs saved to {output_dir}/")
-
-
-# Keep backward-compatible alias
-plot_all_exp2 = generate_all_exp2_outputs
